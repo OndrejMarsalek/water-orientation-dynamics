@@ -1,6 +1,6 @@
 ///=============================================================================
 ///
-/// Orientation-resolved radial distribution function
+/// Orientation-resolved distribution functions
 ///
 /// author: Ondrej Marsalek
 ///         ondrej.marsalek@gmail.com
