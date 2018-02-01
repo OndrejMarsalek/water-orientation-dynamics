@@ -1,5 +1,17 @@
+Orientational structure and dynamics of water around solutes
+============================================================
+
+Orientation-resolved distribution functions
+-------------------------------------------
+
+Program: `or-df`
+
+
 Conditional time correlation functions
-======================================
+--------------------------------------
+
+Program: `ctcf`
+
 
 Build
 -----
@@ -8,7 +20,7 @@ Building the analysis tools requires an installation of GROMACS 5.1 and a C++
 compiler. Note that earlier versions of GROMACS (including 5.0.x) will not
 work, as there have been changes in header files and the signatures of some
 functions. The same goes for newer versions of GROMACS, unfortunately. If/when
-the constant changes are over, I would consider an update
+the constant changes are over, I would consider an update.
 
 Edit `makefile` to set the compiler and compiler flags under the "user build
 settings" section or pick one of the suggested settings. Make sure that you

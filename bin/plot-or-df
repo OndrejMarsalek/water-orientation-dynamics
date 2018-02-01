@@ -1,0 +1,328 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+import sys
+import argparse
+
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+
+
+labels_integral = {
+    'radial': {
+        'total': 'RDF',
+        'OH in': 'RDF - OH in',
+        'OH out': 'RDF - OH out',
+        'DM in': 'RDF - DM in',
+        'DM out': 'RDF - DM out'
+    },
+    'z': {
+        'total': 'rho',
+        'OH in': 'rho - OH in',
+        'OH out': 'rho - OH out',
+        'DM in': 'rho - DM in',
+        'DM out': 'rho - DM out'
+    }
+}
+
+labels_y = {
+    'radial': 'g(r)',
+    'z': 'rho [nm^-3]'
+}
+
+labels_x = {
+    'radial': 'oxygen distance from reference [nm]',
+    'z': 'oxygen z-coordinate [nm]'
+}
+
+
+def load_or_df(fn):
+
+    # load all the data
+    data = np.loadtxt(fn)
+
+    # get type of distribution function
+    if data[0,0] == 0.0:
+        dftype = 'radial'
+    elif data[0,0] == 1.0:
+        dftype = 'z'
+    else:
+        raise ValueError('Unexpected type of distribution function.')
+
+    # get r values
+    r_load = data[0,1:]
+
+    # get theta values
+    theta_load = data[1:,0]
+
+    # get the OR-DF 2D array
+    or_df = data[1:,1:]
+
+    # number of grid points in theta and r
+    n_th, n_r = or_df.shape
+
+    # we don't have r_max, must reconstruct it from data
+    dr = r_load[1] - r_load[0]
+    r_max = n_r * dr
+
+    # generate expected theta values:
+    # n_th points from 0 to 180 in the centers of bins
+    theta = np.linspace(0, 180, n_th, endpoint=False)
+    dth = theta[1]
+    theta += 0.5 * dth
+
+    # generate expected r values:
+    # n_r points from 0 to r_max in the centers of bins
+    r = np.linspace(0, r_max, n_r, endpoint=False)
+    r += 0.5 * dr
+
+    assert np.isclose(theta, theta_load).all()
+    assert np.isclose(r, r_load).all()
+
+    return dftype, or_df, r_max
+
+
+def or_df_to_df(or_df):
+
+    # numbers of bins in theta and r
+    n_th, n_r = or_df.shape
+
+    # n_th points from 0 to pi in the centers of bins
+    theta = np.linspace(0, np.pi, n_th, endpoint=False)
+    dth = theta[1]
+    theta += 0.5 * dth
+
+    # integrate out the angle, split in two halves
+    or_df_norm = or_df * np.sin(theta[:,np.newaxis])
+    df = dth * or_df_norm.sum(axis=0)
+    df_in = 2 * dth * or_df_norm[:n_th//2,:].sum(axis=0)
+    df_out = 2 * dth * or_df_norm[n_th//2:,:].sum(axis=0)
+
+    return df, df_in, df_out
+
+
+#
+# command line arguments and options
+#
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument('--f-DM', dest='fn_DM', type=str,
+                    help='Input file name - dipole moment.')
+
+parser.add_argument('--f-OH', dest='fn_OH', type=str,
+                    help='Input file name - OH vector.')
+
+parser.add_argument('--r-min', dest='r_min', type=float, default=0.0,
+                    help='Minimum value of r to display, in nm.')
+
+parser.add_argument('--r-max', dest='r_max', type=float, default=100.0,
+                    help='Maximum value of r to display, in nm.')
+
+parser.add_argument('--v-max', dest='vmax', type=float, default=-1.0,
+                    help='Maximum value of OR-DFs in 2D plots. Negative means automatic: 1.0 for RDF and 17.0 for density.')
+
+parser.add_argument('--out', dest='fn_out', type=str,
+                    help='Output plot file name.')
+
+parser.add_argument('--colorbar', dest='colorbar', action='store_true',
+                    help='Draw a color bar.')
+
+parser.add_argument('--no-show', dest='show', action='store_false',
+                    help='Do not show an interactive plot.')
+
+parser.add_argument('--integral', dest='do_integral', action='store_true',
+                    help='Integrate out the angle and show a RDF or density profile.')
+
+parser.add_argument('--legend', dest='do_legend', action='store_true',
+                    help='Add a legend to the angle integrated plot.')
+
+parser.add_argument('--split', dest='do_split', action='store_true',
+                    help='Split the integrated function into two components - towards and away from reference.')
+
+parser.add_argument('--v-max-integral', dest='vmax_integral', type=float, default=None,
+                    help='Maximum value of the angle integrated plot. Automatic range if omitted.')
+
+# run the option parser and get results
+args = parser.parse_args()
+
+# count input files, require at least one
+n_plot = 0
+if args.fn_DM is not None:
+    n_plot += 1
+if args.fn_OH is not None:
+    n_plot += 1
+if n_plot == 0:
+    print('No input files provided.')
+    sys.exit(0)
+if args.do_integral:
+    n_plot += 1
+
+# check that we have something to do
+if (not args.show) and (args.fn_out is None):
+    print('Neither interactive nor saved plot requested.')
+    sys.exit(0)
+
+# plot settings
+vmax_radial = 1.0
+vmax_density = 17.0
+interpolation='bicubic'
+ticks_theta = np.arange(0, 181, 30)
+idx_ax = 0
+cmap_name = 'hot_r'
+cmap = plt.get_cmap(cmap_name)
+
+# initialize a figure with subplots
+figure, axes = plt.subplots(nrows=n_plot, sharex=True)
+if n_plot == 1:
+    axes = np.array([axes])
+
+# plot the dipole moment OR-DF if a file was provided
+if args.fn_DM is not None:
+
+    dftype_DM, or_df_DM, r_max_DM = load_or_df(args.fn_DM)
+
+    ## generate r from 0 to r_max
+    #r = np.linspace(0, r_max_DM, or_df_DM.shape[0], endpoint=False)
+    #dr = r[1]
+    #r += 0.5 * dr
+
+    ax = axes[idx_ax]
+    idx_ax +=1
+
+    im_DM = ax.imshow(or_df_DM,
+                      origin='lower',
+                      aspect='auto',
+                      interpolation=interpolation,
+                      cmap=cmap,
+                      extent=[0, r_max_DM, 0, 180])
+    ax.set_xlim(args.r_min, min(r_max_DM, args.r_max))
+    ax.set_yticks(ticks_theta)
+    ax.set_ylabel('theta [deg], DM')
+    #plt.twinx()
+    #ax.plot([r[0], r[-1]], [2*args.vmax, 2*args.vmax], 'k--', label='max in 2D plots')
+
+# plot the OH bond OR-DF if a file was provided
+if args.fn_OH is not None:
+
+    dftype_OH, or_df_OH, r_max_OH = load_or_df(args.fn_OH)
+
+    ax = axes[idx_ax]
+    idx_ax +=1
+
+    im_OH = ax.imshow(or_df_OH,
+                      origin='lower',
+                      aspect='auto',
+                      interpolation=interpolation,
+                      cmap=cmap,
+                      extent=[0, r_max_OH, 0, 180])
+    ax.set_xlim(args.r_min, min(r_max_OH, args.r_max))
+    ax.set_yticks(ticks_theta)
+    ax.set_ylabel('theta [deg], OH')
+
+# check consistency of distribution function types
+if (args.fn_OH is not None) and (args.fn_DM is not None):
+    if dftype_OH != dftype_DM:
+        raise ValueError('The two files do not have the same type of distribution function.')
+
+# store distribution function type and set value ranges if needed
+if args.fn_OH is not None:
+    dftype = dftype_OH
+    im = im_OH
+    if args.vmax < 0:
+        if dftype == 'radial':
+            args.vmax = vmax_radial
+        else:
+            args.vmax = vmax_density
+    im.norm.vmin = 0.0
+    im.norm.vmax = args.vmax
+    or_df = or_df_OH
+    r_max = r_max_OH
+if args.fn_DM is not None:
+    dftype = dftype_DM
+    im = im_DM
+    if args.vmax < 0:
+        if dftype == 'radial':
+            args.vmax = vmax_radial
+        else:
+            args.vmax = vmax_density
+    im.norm.vmin = 0.0
+    im.norm.vmax = args.vmax
+    or_df = or_df_DM
+    r_max = r_max_DM
+
+# calculate and plot with angle integrated out, if requested
+if args.do_integral:
+
+    # switch to axes
+    ax = axes[idx_ax]
+
+    # calculate DF from OR-DF
+    df, df_in, df_out = or_df_to_df(or_df)
+
+    # generate r from 0 to r_max
+    r = np.linspace(0, r_max, df.shape[0], endpoint=False)
+    dr = r[1]
+    r += 0.5 * dr
+
+    # plot vmax from 2D plots
+    # factor of 2 because of normalization to preserve meaning of the value
+    ax.plot([r[0], r[-1]], [2*args.vmax, 2*args.vmax], 'k--', label='max in 2D plots')
+
+    # plot integrated function
+    ax.plot(r, df, color='black', label=labels_integral[dftype]['total'])
+    if args.do_split:
+        if args.fn_OH is not None:
+            df, df_in, df_out = or_df_to_df(or_df_OH)
+            r = np.linspace(0, r_max_OH, df.shape[0], endpoint=False)
+            dr = r[1]
+            r += 0.5 * dr
+            ax.plot(r, df_in, color='red', label=labels_integral[dftype]['OH in'])
+            ax.plot(r, df_out, color='orange', label=labels_integral[dftype]['OH out'])
+        if args.fn_DM is not None:
+            df, df_in, df_out = or_df_to_df(or_df_DM)
+            r = np.linspace(0, r_max_DM, df.shape[0], endpoint=False)
+            dr = r[1]
+            r += 0.5 * dr
+            ax.plot(r, df_in, color='navy', label=labels_integral[dftype]['DM in'])
+            ax.plot(r, df_out, color='blue', label=labels_integral[dftype]['DM out'])
+    ax.set_ylabel(labels_y[dftype])
+    ax.set_xlim(args.r_min, min(r_max, args.r_max))
+    if args.vmax_integral is not None:
+        ax.set_ylim(0, args.vmax_integral)
+    elif plt.axis()[3] < 2.1*args.vmax:
+        ax.set_ylim(0, 2.1*args.vmax)
+    if args.do_legend:
+        plt.legend(prop={'size': 12}, ncol=2)
+
+# set common label of x axis
+plt.xlabel(labels_x[dftype])
+
+# make the layout tight
+plt.tight_layout()
+
+# add a color bar if requested
+if args.colorbar:
+    try:
+        cax, kw = mpl.colorbar.make_axes([ax for ax in axes.flat],
+                                         location='top',
+                                         fraction=0.075,
+                                         pad=0.05,
+                                         aspect=30)
+    except AttributeError:
+        cax, kw = mpl.colorbar.make_axes(axes[0],
+                                         location='top',
+                                         fraction=0.075,
+                                         pad=0.05,
+                                         aspect=30)
+    plt.colorbar(im, cax=cax, **kw)
+
+# if a filename was provided, save the plot
+if args.fn_out is not None:
+    plt.savefig(args.fn_out)
+
+# if an interactive plot is requested, show it
+if args.show:
+    plt.show()

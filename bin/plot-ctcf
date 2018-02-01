@@ -1,0 +1,336 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+import sys
+import argparse
+
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+
+
+def load_ctcf(fn):
+
+    # load all the data
+    data = np.loadtxt(fn)
+
+    # get order of Legendre polynomial
+    Porder = int(data[0,0])
+    if Porder not in [1, 2]:
+        raise ValueError('Unexpected order of Legendre polynomial: %d' % Porder)
+
+    # get r values
+    r_load = data[1:,0]
+
+    # get tau values
+    tau_load = data[0,1:]
+    tau_max = tau_load[-1]
+
+    # get the CTCF 2D array
+    ctcf = data[1:,1:]
+
+    # number of grid points r and tau
+    n_r, n_tau = ctcf.shape
+
+    # we don't have r_max, must reconstruct it from data
+    dr = r_load[1] - r_load[0]
+    r_max = n_r * dr
+
+    # generate expected r values:
+    # n_r points from 0 to r_max in the centers of bins
+    r = np.linspace(0, r_max, n_r, endpoint=False)
+    r += 0.5 * dr
+
+    # generate expected tau values
+    tau = np.linspace(0, tau_max, n_tau, endpoint=True)
+
+    assert np.isclose(r, r_load).all()
+    assert np.isclose(tau, tau_load, rtol=1e-3, atol=1e-3).all()
+
+    return ctcf, r, r_max, tau, Porder
+
+
+def normalized_ctcf(ctcf):
+
+    ctcf = ctcf.copy()
+
+    for i in range(ctcf.shape[0]):
+        if ctcf[i,0] > 0.0:
+            ctcf[i,:] /= ctcf[i,0]
+
+    return ctcf
+
+
+def acf_from_ctcf(ctcf):
+
+    acf = ctcf.sum(axis=0)
+    acf /= acf[0]
+
+    return acf
+
+
+#
+# command line arguments and options
+#
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument('--f-DM', dest='fn_DM', type=str,
+                    help='Input file name - dipole moment.')
+
+parser.add_argument('--f-OH', dest='fn_OH', type=str,
+                    help='Input file name - OH vector.')
+
+parser.add_argument('--r-min', dest='r_min', type=float, default=0.0,
+                    help='Minimum value of r to display, in nm.')
+
+parser.add_argument('--r-max', dest='r_max', type=float, default=100.0,
+                    help='Maximum value of r to display, in nm.')
+
+parser.add_argument('--tau-max', dest='tau_max', type=float, default=1000.0,
+                    help='Maximum value of tau to display, in ps.')
+
+parser.add_argument('--out', dest='fn_out', type=str,
+                    help='Output plot file name.')
+
+parser.add_argument('--out-tau', dest='fn_out_tau', type=str,
+                    help='Output plot file name - tau.')
+
+parser.add_argument('--colorbar', dest='colorbar', action='store_true',
+                    help='Draw a color bar.')
+
+parser.add_argument('--no-show', dest='show', action='store_false',
+                    help='Do not show an interactive plot.')
+
+parser.add_argument('--n-levels', dest='n_levels', type=int, default=30,
+                    help='Number of color levels to use.')
+
+parser.add_argument('--v-min', dest='vmin', type=float, default=0.0,
+                    help='Minimum value in in 2D plots.')
+
+parser.add_argument('--sum', dest='do_sum', action='store_true',
+                    help='Sum up decomposed data to total correlation functions.')
+
+parser.add_argument('--r-bulk', dest='r_bulk', type=float, default=1.0,
+                    help='Distance (in nm) at which dynamics is considered unperturbed by the solute. '
+                         '\tau_\infty will be collected starting at this distance.')
+
+# run the option parser and get results
+args = parser.parse_args()
+
+# count input files, require at least one
+n_plot = 0
+if args.fn_OH is not None:
+    n_plot += 1
+if args.fn_DM is not None:
+    n_plot += 1
+if n_plot == 0:
+    print('No input files provided.')
+    sys.exit(0)
+if args.do_sum:
+    n_plot += 1
+
+# check that we have something to do
+if (not args.show) and (args.fn_out is None):
+    print('Neither interactive nor saved plot requested.')
+    sys.exit(0)
+
+# plot settings
+# create equidistant levels in log scale
+# TODO: 1e-12 is too small, should probably be set from the actual data, even
+# though that's tricky, as one or both can be provided
+levels_exp = np.linspace(np.log10(max(1e-12, args.vmin)), 0.0, args.n_levels+1)
+levels = np.power(10, levels_exp)
+
+idx_ax = 0
+#cmap_name = 'hot_r'
+cmap_name = 'jet'
+cmap = plt.get_cmap(cmap_name)
+
+#
+# CTCF 2D plots for all data provided
+#
+
+# initialize a figure with subplots
+figure, axes = plt.subplots(nrows=n_plot, sharex=True)
+if n_plot == 1:
+    axes = np.array([axes])
+
+# TODO
+# add log scale setting that applies to both 2D and 1D panels
+# http://matplotlib.org/examples/pylab_examples/contourf_log.html
+
+# plot the dipole moment correlation function is a file was provided
+if args.fn_DM is not None:
+
+    ctcf_DM, r_DM, r_max_DM, t_DM, Porder_DM = load_ctcf(args.fn_DM)
+    dtau_DM = t_DM[1] - t_DM[0]
+    tau_max = t_DM[-1]
+    Porder = Porder_DM
+
+    ax = axes[idx_ax]
+    idx_ax +=1
+
+    ctcf_DM_plot = np.ma.masked_where(ctcf_DM<=0, ctcf_DM)
+
+    cf = ax.contourf(normalized_ctcf(ctcf_DM_plot),
+                     levels, norm=mpl.colors.LogNorm(), locator=mpl.ticker.LogLocator(),
+                     extent=[0, tau_max, 0, r_max_DM],
+                     cmap=cmap)
+    ax.set_xlim(0, min(tau_max, args.tau_max))
+    ax.set_ylim(args.r_min, min(r_max_DM, args.r_max))
+    ax.set_ylabel('d [nm], DM')
+
+if args.fn_OH is not None:
+
+    ctcf_OH, r_OH, r_max_OH, t_OH, Porder_OH = load_ctcf(args.fn_OH)
+    dtau_OH = t_OH[1] - t_OH[0]
+    tau_max = t_OH[-1]
+    Porder = Porder_OH
+
+    ax = axes[idx_ax]
+    idx_ax +=1
+
+    ctcf_OH_plot = np.ma.masked_where(ctcf_OH<=0, ctcf_OH)
+
+    cf = ax.contourf(normalized_ctcf(ctcf_OH_plot),
+                     levels, norm=mpl.colors.LogNorm(), locator=mpl.ticker.LogLocator(),
+                     extent=[0, tau_max, 0, r_max_OH],
+                     cmap=cmap)
+    ax.set_xlim(0, min(tau_max, args.tau_max))
+    ax.set_ylim(args.r_min, min(r_max_OH, args.r_max))
+    ax.set_ylabel('d [nm], OH')
+
+# check consistency
+if (args.fn_DM is not None) and (args.fn_OH is not None):
+    if Porder_DM != Porder_OH:
+        raise ValueError('Inconsistent order of Legendre polynomials in the two data files.')
+
+if args.do_sum:
+
+    ax = axes[idx_ax]
+
+    if args.fn_DM is not None:
+        plt.plot(t_DM, acf_from_ctcf(ctcf_DM), label='dipole moment')
+    if args.fn_OH is not None:
+        plt.plot(t_OH, acf_from_ctcf(ctcf_OH), label='OH bond')
+
+    plt.semilogy()
+    plt.ylim(args.vmin, 1.0)
+    plt.legend(prop={'size': 12})
+    plt.ylabel('C{:1d}'.format(Porder))
+
+# set common label of x axis
+plt.xlabel('C%1d orientation autocorrelation time [ps]' % Porder)
+
+# make the layout tight
+plt.tight_layout(h_pad=0.01)
+
+# add a color bar if requested
+if args.colorbar:
+    try:
+        cax, kw = mpl.colorbar.make_axes([ax for ax in axes.flat],
+                                         location='top',
+                                         fraction=0.075,
+                                         pad=0.05,
+                                         aspect=30)
+    except AttributeError:
+        cax, kw = mpl.colorbar.make_axes(axes[0],
+                                         location='top',
+                                         fraction=0.075,
+                                         pad=0.05,
+                                         aspect=30)
+    cbar = plt.colorbar(cf, cax=cax, **kw)
+    cbar.ax.invert_xaxis()
+    ticks_c = [10**i for i in range(-12, 1)]    # mark orders of magnitude on the colorbar
+    cbar.set_ticks(ticks_c)
+
+# if a filename was provided, save the plot
+if args.fn_out is not None:
+    plt.savefig(args.fn_out)
+
+#
+# autocorrelation time resolved w.r.t. the coordinate
+# both from normalized and correctly weighted CTCF
+#
+
+plt.figure()
+
+# ACF normalized at each distance
+ax1 = plt.subplot(211)
+
+if args.fn_DM is not None:
+
+    # first index at which r is bigger than r_bulk
+    ir_bulk = np.where(r_DM > args.r_bulk)[0][0]
+
+    # autocorrelation time "in the bulk" - unperturbed by solute
+    acf_bulk = ctcf_DM[ir_bulk:,:].sum(axis=0)
+    acf_bulk /= acf_bulk[0]
+    tau_inf_DM = dtau_DM * acf_bulk.sum()
+
+    # autocorrelation time resolved w.r.t. distance
+    tau_DM = dtau_DM * normalized_ctcf(ctcf_DM).sum(axis=1)
+
+    plt.plot(r_DM, tau_DM, color='blue', label='dipole moment')
+    plt.plot([r_DM[0], r_DM[-1]], [tau_inf_DM, tau_inf_DM], ':', color='blue')
+
+if args.fn_OH is not None:
+
+    # first index at which r is bigger than r_bulk
+    ir_bulk = np.where(r_OH > args.r_bulk)[0][0]
+
+    # autocorrelation time "in the bulk" - unperturbed by solute
+    acf_bulk = ctcf_OH[ir_bulk:,:].sum(axis=0)
+    acf_bulk /= acf_bulk[0]
+    tau_inf_OH = dtau_OH * acf_bulk.sum()
+
+    # autocorrelation time resolved w.r.t. distance
+    tau_OH = dtau_OH * normalized_ctcf(ctcf_OH).sum(axis=1)
+
+    plt.plot(r_OH, tau_OH, color='green', label='OH vector')
+    plt.plot([r_OH[0], r_OH[-1]], [tau_inf_OH, tau_inf_OH], ':', color='green')
+
+ax1.set_xticklabels([])
+plt.legend(loc='upper right')
+plt.xlim(args.r_min, min(r_max_OH, args.r_max))
+plt.ylabel('tau [ps]')
+
+# cumulative excess contribution to tau
+#plt.subplot(212, sharex=ax1)   # This removes xticklabels also on the bottom panel, not what we want.
+plt.subplot(212)
+if args.fn_DM is not None:
+    P = ctcf_DM[:,0] / ctcf_DM[:,0].sum()
+    tau_e = (P * (tau_DM - tau_inf_DM)).cumsum()
+    plt.plot(r_DM, tau_e, color='blue', label='dipole moment')
+if args.fn_OH is not None:
+    P = ctcf_OH[:,0] / ctcf_OH[:,0].sum()
+    tau_e = (P * (tau_OH - tau_inf_OH)).cumsum()
+    plt.plot(r_OH, tau_e, color='green', label='OH vector')
+plt.xlabel('d [nm]')
+plt.ylabel('Delta tau [ps]')
+#plt.yticks([])
+plt.xlim(args.r_min, min(r_max_OH, args.r_max))
+
+plt.tight_layout()
+
+# if a filename was provided, save the plot
+if args.fn_out_tau is not None:
+    plt.savefig(args.fn_out_tau)
+
+#fmt_taus = '{:10.6f} {:10.6f} {:10.6f}'
+print('{:>14s}{:>14s}{:>14s}'.format('tau_inf [ps]', 'tau [ps]', 'diff [ps]'))
+fmt_taus = '{f:s}{f:s}{f:s}'.format(f='{:14.6f}')
+if args.fn_OH is not None:
+    data = [tau_inf_OH, dtau_OH * acf_from_ctcf(ctcf_OH).sum()]
+    data.append(data[1] - data[0])
+    print(fmt_taus.format(*data))
+if args.fn_DM is not None:
+    data = [tau_inf_DM, dtau_DM * acf_from_ctcf(ctcf_DM).sum()]
+    data.append(data[1] - data[0])
+    print(fmt_taus.format(*data))
+
+# if an interactive plot is requested, show it
+if args.show:
+    plt.show()
