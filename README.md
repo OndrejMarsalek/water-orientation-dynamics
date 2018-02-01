@@ -4,13 +4,17 @@ Orientational structure and dynamics of water around solutes
 Orientation-resolved distribution functions
 -------------------------------------------
 
-Program: `or-df`
+Program: `bin/or-df`
+
+Plotting tool: `bin/plot-or-df`
 
 
 Conditional time correlation functions
 --------------------------------------
 
-Program: `ctcf`
+Program: `bin/ctcf`
+
+Plotting tool: `bin/plot-ctcf`
 
 
 Build
